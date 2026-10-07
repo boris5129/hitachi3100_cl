@@ -88,6 +88,7 @@ public class MainFrame extends JFrame {
             ch.addListener(createStatusListener(ch));
         }
         orderService.addEventListener(this::onProtocolEvent);
+        com.hitachi3100.util.Storage.addListener(this::onProtocolEvent);   // 파일 잠김/복구 알림
 
         initUI();
         startClockTimer();
@@ -362,6 +363,11 @@ public class MainFrame extends JFrame {
             orderService.shutdown();
             simulator.disconnect();
             serialChannel.disconnect();
+            if (!com.hitachi3100.util.Storage.flushAll(5000)) {
+                com.hitachi3100.util.AppLog.error("종료 시 일부 데이터를 저장하지 못했습니다 (.pending 파일 확인)");
+            }
+            com.hitachi3100.util.AppLog.info("=== 프로그램 종료 ===");
+            com.hitachi3100.util.AppLog.flush(2000);
         } finally {
             dispose();
             System.exit(0);

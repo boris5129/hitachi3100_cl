@@ -13,6 +13,8 @@ import javax.swing.event.DocumentListener;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,6 +32,17 @@ public class Tab4HistoryPanel extends JPanel {
     // 검색 및 필터 컴포넌트
     private JTextField searchField;
     private JComboBox<String> statusFilterCombo;
+
+    // 과거 기록(기간) 검색
+    private static final int MAX_DISPLAY_ROWS = 1000;      // 표에 한 번에 보여줄 최대 행 수 (화면 지연 방지)
+    private static final int MAX_ARCHIVE_ROWS = 2000;
+    private JTextField fromDateField;
+    private JTextField toDateField;
+    private JButton archiveSearchBtn;
+    private JLabel infoLabel;
+    private boolean archiveMode = false;
+    private int searchSeq = 0;
+    private javax.swing.Timer debounceTimer;
 
     // 상단 메인 이력 테이블
     private DefaultTableModel historyTableModel;
@@ -84,7 +97,7 @@ public class Tab4HistoryPanel extends JPanel {
         left.add(new JLabel("상태 필터:"));
         statusFilterCombo = new JComboBox<>(new String[]{"전체", "정상", "이상치"});
         statusFilterCombo.setFont(UIStyle.FONT_REGULAR);
-        statusFilterCombo.addActionListener(e -> refreshHistory());
+        statusFilterCombo.addActionListener(e -> onFilterChanged());
         left.add(statusFilterCombo);
 
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
@@ -96,6 +109,33 @@ public class Tab4HistoryPanel extends JPanel {
 
         bar.add(left, BorderLayout.WEST);
         bar.add(right, BorderLayout.EAST);
+
+        // 두 번째 줄: 과거 기록 기간 검색 (메모리에는 최근 기록만 올라와 있음)
+        JPanel archiveRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        archiveRow.setOpaque(false);
+        archiveRow.add(new JLabel("📅 과거 기록 기간 검색:"));
+        LocalDate defaultTo = historyService.getMemoryFrom() != null ? historyService.getMemoryFrom().toLocalDate() : LocalDate.now();
+        fromDateField = new JTextField(defaultTo.minusYears(1).toString(), 8);
+        toDateField = new JTextField(defaultTo.toString(), 8);
+        fromDateField.setToolTipText("시작일 (yyyy-MM-dd)");
+        toDateField.setToolTipText("종료일 (yyyy-MM-dd)");
+        archiveRow.add(fromDateField);
+        archiveRow.add(new JLabel("~"));
+        archiveRow.add(toDateField);
+        archiveSearchBtn = UIStyle.createPrimaryButton("과거 기록 검색");
+        archiveSearchBtn.addActionListener(e -> runArchiveSearch());
+        archiveRow.add(archiveSearchBtn);
+        JButton backBtn = UIStyle.createSecondaryButton("최근 기록으로 돌아가기");
+        backBtn.addActionListener(e -> {
+            archiveMode = false;
+            searchSeq++;
+            refreshHistory();
+        });
+        archiveRow.add(backBtn);
+        infoLabel = new JLabel(" ");
+        infoLabel.setFont(UIStyle.FONT_REGULAR);
+        archiveRow.add(infoLabel);
+        bar.add(archiveRow, BorderLayout.SOUTH);
         return bar;
     }
 
@@ -209,51 +249,126 @@ public class Tab4HistoryPanel extends JPanel {
     }
 
     private void initListeners() {
-        historyService.addChangeListener(this::refreshHistory);
+        // 새 결과가 들어와도 과거 기록 검색 결과 화면은 건드리지 않는다
+        historyService.addChangeListener(() -> {
+            if (!archiveMode) refreshHistory();
+        });
 
-        // 실시간 검색어 변경 감지
+        // 실시간 검색: 입력이 250ms 멈춘 뒤에 한 번만 갱신 (한 글자마다 전체 필터링하지 않음)
+        debounceTimer = new javax.swing.Timer(250, e -> onFilterChanged());
+        debounceTimer.setRepeats(false);
         searchField.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
-                refreshHistory();
+                debounceTimer.restart();
             }
             @Override
             public void removeUpdate(DocumentEvent e) {
-                refreshHistory();
+                debounceTimer.restart();
             }
             @Override
             public void changedUpdate(DocumentEvent e) {
-                refreshHistory();
+                debounceTimer.restart();
             }
         });
     }
 
+    private void onFilterChanged() {
+        if (archiveMode) runArchiveSearch(); else refreshHistory();
+    }
+
     private void refreshHistory() {
         SwingUtilities.invokeLater(() -> {
+            if (archiveMode) return;
             String query = searchField.getText();
             String statusFilter = (String) statusFilterCombo.getSelectedItem();
 
-            currentDisplayedList = historyService.filter(query, statusFilter);
-            historyTableModel.setRowCount(0);
+            List<PatientRecord> all = historyService.filter(query, statusFilter);
+            List<PatientRecord> shown = all.size() > MAX_DISPLAY_ROWS ? new ArrayList<>(all.subList(0, MAX_DISPLAY_ROWS)) : all;
+            populate(shown);
 
-            for (PatientRecord r : currentDisplayedList) {
-                historyTableModel.addRow(new Object[]{
-                        r.getFormattedDateTime(),
-                        r.getPosition(),
-                        r.getPatientId(),
-                        r.getTestItemsSummary(),
-                        r.getStatus(),
-                        r.getResultsSummary()
-                });
+            String base = "메모리: 최근 " + historyService.getMemoryDays() + "일 기록 (" + historyService.getMemoryFrom().toLocalDate() + " 이후)";
+            if (all.size() > MAX_DISPLAY_ROWS) {
+                infoLabel.setText(base + " | 일치 " + all.size() + "건 중 최신 " + MAX_DISPLAY_ROWS + "건 표시 - 검색어로 좁혀 주세요");
+            } else {
+                infoLabel.setText(base);
             }
-
-            if (historyTable.getRowCount() > 0 && historyTable.getSelectedRow() == -1) {
-                historyTable.setRowSelectionInterval(0, 0);
-            } else if (historyTable.getRowCount() == 0) {
-                detailTableModel.setRowCount(0);
-                detailHeaderLabel.setText("조건에 일치하는 검사 이력이 없습니다.");
-            }
+            infoLabel.setForeground(Color.DARK_GRAY);
         });
+    }
+
+    /** 표에 목록을 채운다 (EDT 에서 호출) */
+    private void populate(List<PatientRecord> rows) {
+        currentDisplayedList = rows;
+        historyTableModel.setRowCount(0);
+        for (PatientRecord r : rows) {
+            historyTableModel.addRow(new Object[]{
+                    r.getFormattedDateTime(),
+                    r.getPosition(),
+                    r.getPatientId(),
+                    r.getTestItemsSummary(),
+                    r.getStatus(),
+                    r.getResultsSummary()
+            });
+        }
+
+        if (historyTable.getRowCount() > 0 && historyTable.getSelectedRow() == -1) {
+            historyTable.setRowSelectionInterval(0, 0);
+        } else if (historyTable.getRowCount() == 0) {
+            detailTableModel.setRowCount(0);
+            detailHeaderLabel.setText("조건에 일치하는 검사 이력이 없습니다.");
+        }
+    }
+
+    /** 오래된 기록을 파일에서 찾는다. 파일 스캔은 백그라운드 스레드에서 수행해 화면이 멈추지 않는다. */
+    private void runArchiveSearch() {
+        final LocalDate from;
+        final LocalDate to;
+        try {
+            from = LocalDate.parse(fromDateField.getText().trim());
+            to = LocalDate.parse(toDateField.getText().trim());
+        } catch (DateTimeParseException ex) {
+            infoLabel.setText("날짜는 yyyy-MM-dd 형식으로 입력하세요 (예: 2026-01-31)");
+            infoLabel.setForeground(UIStyle.COLOR_HIGH_TEXT);
+            return;
+        }
+        if (from.isAfter(to)) {
+            infoLabel.setText("시작일이 종료일보다 늦습니다.");
+            infoLabel.setForeground(UIStyle.COLOR_HIGH_TEXT);
+            return;
+        }
+        final String query = searchField.getText();
+        final String status = (String) statusFilterCombo.getSelectedItem();
+        final int seq = ++searchSeq;
+        archiveMode = true;
+        archiveSearchBtn.setEnabled(false);
+        infoLabel.setText("검색 중... (" + from + " ~ " + to + ")");
+        infoLabel.setForeground(Color.DARK_GRAY);
+
+        new SwingWorker<HistoryService.ArchiveResult, Void>() {
+            @Override
+            protected HistoryService.ArchiveResult doInBackground() throws Exception {
+                return historyService.searchArchive(from, to, query, status, MAX_ARCHIVE_ROWS);
+            }
+
+            @Override
+            protected void done() {
+                if (seq == searchSeq) archiveSearchBtn.setEnabled(true);
+                if (seq != searchSeq) return;     // 더 최근 검색이 있으면 이 결과는 버린다
+                try {
+                    HistoryService.ArchiveResult res = get();
+                    populate(res.rows);
+                    String msg = "과거 기록 검색 결과: " + res.rows.size() + "건 (" + from + " ~ " + to + ")";
+                    if (res.truncated) msg += " - 일치 " + res.matchedScanned + "건 중 최신 " + MAX_ARCHIVE_ROWS + "건만 표시, 기간/검색어를 좁혀 주세요";
+                    infoLabel.setText(msg);
+                    infoLabel.setForeground(Color.DARK_GRAY);
+                } catch (Exception ex) {
+                    infoLabel.setText("검색 실패: " + ex.getMessage());
+                    infoLabel.setForeground(UIStyle.COLOR_HIGH_TEXT);
+                    com.hitachi3100.util.AppLog.error("과거 기록 검색 실패", ex);
+                }
+            }
+        }.execute();
     }
 
     private void onPatientSelected() {

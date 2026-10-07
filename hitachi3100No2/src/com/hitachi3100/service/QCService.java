@@ -5,11 +5,14 @@ import com.hitachi3100.model.QCRecord;
 import com.hitachi3100.model.TestItem;
 import com.hitachi3100.model.TestResult;
 
+import com.hitachi3100.util.AppLog;
+import com.hitachi3100.util.CsvAppender;
 import com.hitachi3100.util.DataPaths;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Matcher;
@@ -26,10 +29,27 @@ public class QCService {
     private final Map<TestItem, CalibrationParam> paramMap = new EnumMap<>(TestItem.class);
     private final List<QCRecord> qcRecords = new CopyOnWriteArrayList<>();
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
+    private final CsvAppender appender;
+    private final int memoryDays;
 
     public QCService() {
+        this(Integer.getInteger("hitachi.qc.days", 90));
+    }
+
+    /** 최근 memoryDays 일의 QC 기록만 메모리에 올린다 (파일에는 전체가 보관됨) */
+    public QCService(int memoryDays) {
+        this.memoryDays = Math.max(1, memoryDays);
+        this.appender = new CsvAppender(DataPaths.file(QC_RESULTS_NAME), QC_HEADER);
         initCalibrationParams();
         loadQCResults();
+    }
+
+    public boolean flush(long timeoutMs) {
+        return appender.flush(timeoutMs);
+    }
+
+    public void close() {
+        appender.close();
     }
 
     private void initCalibrationParams() {
@@ -89,7 +109,7 @@ public class QCService {
 
             QCRecord rec = new QCRecord(now, level, tr.getItem(), tr.getValue(), tgt, mn, mx);
             qcRecords.add(rec);
-            appendQCRecordToCsv(rec);
+            appender.append(rec.toCsvLine());   // 비동기 저장
             count++;
         }
         if (count > 0) notifyListeners();
@@ -189,7 +209,7 @@ public class QCService {
                 return true;
             }
         } catch (Exception e) {
-            System.err.println("Barcode parse failed: " + e.getMessage());
+            com.hitachi3100.util.AppLog.error("Barcode parse failed: " + e.getMessage());
         }
         return false;
     }
@@ -237,7 +257,7 @@ public class QCService {
         try (InputStreamReader r = new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8)) {
             p.load(r);
         } catch (Exception e) {
-            System.err.println("Error loading qc_config.properties: " + e.getMessage());
+            com.hitachi3100.util.AppLog.error("Error loading qc_config.properties: " + e.getMessage());
             return;
         }
         for (TestItem item : TestItem.values()) {
@@ -252,7 +272,7 @@ public class QCService {
                 validateParam(tgt, mn, mx, k, conc);
                 paramMap.put(item, new CalibrationParam(item, tgt, mn, mx, k, conc));
             } catch (Exception e) {
-                System.err.println("qc_config.properties: " + code + " 항목 무시(" + e.getMessage() + ")");
+                com.hitachi3100.util.AppLog.error("qc_config.properties: " + code + " 항목 무시(" + e.getMessage() + ")");
             }
         }
     }
@@ -273,31 +293,23 @@ public class QCService {
             p.store(w, "Hitachi 3100 QC & Calibration Config");
             DataPaths.atomicWrite(DataPaths.file(QC_CONFIG_NAME), w.toString());
         } catch (Exception e) {
-            System.err.println("Error saving qc_config.properties: " + e.getMessage());
+            com.hitachi3100.util.AppLog.error("Error saving qc_config.properties: " + e.getMessage());
         }
     }
 
     private void loadQCResults() {
-        File f = DataPaths.file(QC_RESULTS_NAME).toFile();
-        if (!f.exists()) return;
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
-            String line = br.readLine(); // Header
-            while ((line = br.readLine()) != null) {
-                QCRecord rec = QCRecord.fromCsvLine(line);
-                if (rec != null) {
-                    qcRecords.add(rec);
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("Error loading qc_results.csv: " + e.getMessage());
-        }
-    }
-
-    private synchronized void appendQCRecordToCsv(QCRecord rec) {
+        String cutoff = LocalDateTime.now().minusDays(memoryDays).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        List<QCRecord> loaded = new ArrayList<>();
         try {
-            DataPaths.appendLine(DataPaths.file(QC_RESULTS_NAME), QC_HEADER, rec.toCsvLine());
+            CsvAppender.scanLines(DataPaths.file(QC_RESULTS_NAME), cutoff, line -> {
+                QCRecord rec = QCRecord.fromCsvLine(line);
+                if (rec != null) loaded.add(rec);
+            });
         } catch (Exception e) {
-            System.err.println("Error appending to qc_results.csv: " + e.getMessage());
+            AppLog.error("qc_results.csv 읽기 실패", e);
         }
+        loaded.sort(Comparator.comparing(QCRecord::getTimestamp));
+        qcRecords.addAll(loaded);
+        AppLog.info("QC 기록 로드: " + loaded.size() + "건 (최근 " + memoryDays + "일)");
     }
 }

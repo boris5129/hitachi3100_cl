@@ -129,10 +129,10 @@ public enum TestItem {
                 if (ch >= 1 && ch <= 37) {
                     item.channel = ch;
                 } else {
-                    System.err.println("channel_map: 채널 범위 오류(1~37) " + item.code + "=" + v);
+                    com.hitachi3100.util.AppLog.error("channel_map: 채널 범위 오류(1~37) " + item.code + "=" + v);
                 }
             } catch (NumberFormatException e) {
-                System.err.println("channel_map: 숫자 형식 오류 " + item.code + "=" + v);
+                com.hitachi3100.util.AppLog.error("channel_map: 숫자 형식 오류 " + item.code + "=" + v);
             }
         }
     }
@@ -144,7 +144,7 @@ public enum TestItem {
             p.load(r);
             applyChannelMap(p);
         } catch (Exception e) {
-            System.err.println("channel_map 로드 실패: " + e.getMessage());
+            com.hitachi3100.util.AppLog.error("channel_map 로드 실패: " + e.getMessage());
         }
     }
 

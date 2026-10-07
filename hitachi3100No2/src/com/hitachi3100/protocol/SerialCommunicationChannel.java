@@ -132,7 +132,7 @@ public class SerialCommunicationChannel implements IHitachiChannel {
                             try {
                                 l.onFrameReceived(frame);
                             } catch (RuntimeException e) {
-                                System.err.println("Channel listener error: " + e);
+                                com.hitachi3100.util.AppLog.error("Channel listener error: " + e);
                             }
                         }
                     }

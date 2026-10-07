@@ -10,6 +10,7 @@ import java.awt.*;
  */
 public class Main {
     public static void main(String[] args) {
+        com.hitachi3100.util.AppLog.init();   // 파일 로그 + 처리되지 않은 예외 기록
         // High DPI 및 텍스트 앤티앨리어싱 설정
         System.setProperty("sun.java2d.uiScale.enabled", "true");
         System.setProperty("awt.useSystemAAFontSettings", "on");

@@ -67,7 +67,7 @@ public class PresetService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error loading presets: " + e.getMessage());
+            com.hitachi3100.util.AppLog.error("Error loading presets: " + e.getMessage());
         }
     }
 
@@ -88,7 +88,7 @@ public class PresetService {
             props.store(w, "Hitachi 3100 User Custom Presets");
             DataPaths.atomicWrite(DataPaths.file(PRESETS_NAME), w.toString());
         } catch (Exception e) {
-            System.err.println("Error saving presets: " + e.getMessage());
+            com.hitachi3100.util.AppLog.error("Error saving presets: " + e.getMessage());
         }
     }
 }

@@ -3,6 +3,7 @@ package com.hitachi3100;
 import com.hitachi3100.model.*;
 import com.hitachi3100.protocol.*;
 import com.hitachi3100.service.*;
+import com.hitachi3100.util.CsvAppender;
 
 import java.nio.file.*;
 import java.util.*;
@@ -22,6 +23,7 @@ public class ProtocolAndSystemTest {
     public static void main(String[] args) throws Exception {
         Path tmp = Files.createTempDirectory("h3100test");
         System.setProperty("hitachi.data.dir", tmp.toString());
+        System.setProperty("hitachi.log.dir", Files.createTempDirectory("h3100log").toString());
 
         run("BCC / 제어 프레임", ProtocolAndSystemTest::testBccAndControl);
         run("TS 지시(SPE) 프레임 규격 (88바이트)", ProtocolAndSystemTest::testDirectiveLayout);
@@ -41,6 +43,14 @@ public class ProtocolAndSystemTest {
         run("종단 간: Control 샘플은 FU 로 QC 분류, 환자 이력에 안 들어감", ProtocolAndSystemTest::testControlSample);
         run("서비스: 이력 재시작 후 최신순, 시약 원자적 저장, 로케일 독립", ProtocolAndSystemTest::testPersistence);
         run("QC 기준값 검증 / 바코드 파싱", ProtocolAndSystemTest::testQcValidation);
+        run("CSV: 쉼표/따옴표가 든 ID 왕복, 손상된 줄 무시", ProtocolAndSystemTest::testCsvRoundTrip);
+        run("파일 로그: 날짜별 파일, 통신 스레드를 막지 않음", ProtocolAndSystemTest::testAppLog);
+        run("느린 디스크(3초)에서도 MOR 응답이 늦어지지 않음", ProtocolAndSystemTest::testSlowDiskDoesNotDelayMor);
+        run("파일 잠김: .pending 보관 -> 잠금 해제 시 병합, 유실/중복 없음", ProtocolAndSystemTest::testFileLockFallbackAndMerge);
+        run("병합 도중 종료(본 파일+pending 중복)에서도 중복 없음", ProtocolAndSystemTest::testMergeCrashNoDuplicates);
+        run("시약 파일 저장 실패 시 메모리 유지 + 재시도 후 저장", ProtocolAndSystemTest::testReagentSaveRetry);
+        run("지연 로딩: 최근 N일만 메모리, 과거는 기간 검색", ProtocolAndSystemTest::testLazyLoadAndArchiveSearch);
+        run("메모리 상한(20,000건) 및 QC 최근 기간 로딩", ProtocolAndSystemTest::testMemoryCapAndQcWindow);
 
         System.out.println("\n결과: 통과 " + passed + " / 실패 " + failed);
         if (failed > 0) System.exit(1);
@@ -467,14 +477,17 @@ public class ProtocolAndSystemTest {
         Thread.sleep(1100);   // 시각 해상도(초)
         h1.recordPatientResult(2, "NEW", "AST", results(TestItem.AST, 31));
         check(h1.getAllHistory().get(0).getPatientId().equals("NEW"), "실행 중: 최신 우선");
+        check(h1.flush(3000), "저장 대기열 비움");
         HistoryService h2 = new HistoryService();
         check(h2.getAllHistory().get(0).getPatientId().equals("NEW"), "재시작 후에도 최신 우선");
         h2.recordPatientResult(3, "NEWER", "AST", results(TestItem.AST, 32));
         check(h2.getAllHistory().get(0).getPatientId().equals("NEWER"), "재시작 후 새 기록이 맨 앞");
+        h2.flush(3000);
 
         ReagentService r1 = new ReagentService();
         double before = reagentTests(r1, TestItem.AST);
         r1.deductReagents(List.of(TestItem.AST));
+        check(r1.flush(3000), "시약 저장 완료");
         try (var s = Files.list(dir)) {
             check(s.noneMatch(p -> p.getFileName().toString().endsWith(".tmp")), "임시 파일이 남지 않음");
         }
@@ -504,5 +517,241 @@ public class ProtocolAndSystemTest {
         check(qc.getParam(TestItem.AST).getTarget() == 30, "정상 값 저장");
         check(qc.recordQCResult("QC1", List.of(new TestResult(TestItem.AST, Double.NaN, null, "V"))) == 0, "값 없는 결과는 QC 에 기록 안 함");
         check(qc.recordQCResult("QC1", results(TestItem.AST, 31)) == 1, "정상 기록");
+    }
+
+    // ------------------------------------------------------------------ A단계: 비동기 저장 / 잠금 / 로그
+
+    static String slowOrLocked = null;
+
+    static void testAppLog() throws Exception {
+        Path logDir = Files.createTempDirectory("logtest");
+        System.setProperty("hitachi.log.dir", logDir.toString());
+        long t0 = System.nanoTime();
+        for (int i = 0; i < 5000; i++) com.hitachi3100.util.AppLog.info("line " + i);
+        com.hitachi3100.util.AppLog.comm("RECV [AU->HOST] END 결과 | <STX>:a x<ETX>");
+        com.hitachi3100.util.AppLog.error("오류 예시", new RuntimeException("boom"));
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+        check(ms < 500, "5000줄 기록 호출이 호출 스레드를 막지 않음 (" + ms + "ms)");
+        check(com.hitachi3100.util.AppLog.flush(5000), "로그 flush");
+        String today = java.time.LocalDate.now().toString();
+        Path app = logDir.resolve("app-" + today + ".log");
+        Path comm = logDir.resolve("comm-" + today + ".log");
+        check(Files.exists(app) && Files.exists(comm), "app-날짜.log / comm-날짜.log 생성");
+        String txt = Files.readString(app);
+        check(txt.contains("line 4999") && txt.contains("RuntimeException: boom"), "메시지와 스택트레이스 기록");
+        check(Files.readString(comm).contains("END 결과"), "통신 로그 분리");
+        // 오래된 로그 정리: 100일 전 파일은 다음 쓰기 때 삭제됨 (하루 1회 정리)
+        Path old = logDir.resolve("app-" + java.time.LocalDate.now().minusDays(100) + ".log");
+        Files.writeString(old, "old");
+        check(Files.exists(old), "준비");
+        com.hitachi3100.util.AppLog.purgeOldLogs();
+        check(!Files.exists(old), "90일 지난 로그는 삭제");
+        check(Files.exists(app), "오늘 로그는 유지");
+    }
+
+    static void testSlowDiskDoesNotDelayMor() throws Exception {
+        freshDataDir();
+        HistoryService hs = new HistoryService();
+        QCService qc = new QCService();
+        ReagentService rs = new ReagentService();
+        OrderService os = new OrderService(qc, rs, hs);
+        FakeChannel ch = new FakeChannel();
+        os.setCommunicationChannel(ch);
+        os.addOrder(1, "SLOW-1", List.of(TestItem.AST, TestItem.ALT));
+        os.transmitPendingOrders();
+        ch.fromAu(Hitachi3100Frame.createControlFrame(FRAME_ANY));
+        check(waitUntil(() -> ch.sent.size() == 1, 1500), "SPE 전송");
+
+        // 디스크가 3초씩 멈추는 상황 주입
+        CsvAppender.setTestHook(target -> {
+            try { Thread.sleep(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        });
+        try {
+            byte[] end = Hitachi3100Frame.createResultDataFrame(FRAME_END, FU_RESULT_ROUTINE_ID, SampleInfo.forResult(0, 4, "SLOW-1"),
+                    results(TestItem.AST, 30, TestItem.ALT, 25));
+            long t0 = System.currentTimeMillis();
+            ch.fromAu(end);
+            check(waitUntil(() -> ch.sent.size() == 2, 1500), "결과에 대한 MOR");
+            long dt = ch.sentAt.get(1) - t0;
+            check(dt < 1000, "디스크 3초 정지 중에도 MOR 는 1초 안에 전송 (실제 " + dt + "ms)");
+            check(ch.lastChar() == ' ', "MOR");
+            check(hs.getAllHistory().size() == 1, "메모리에는 즉시 반영");
+            long t1 = System.currentTimeMillis();
+            hs.recordPatientResult(9, "X", "AST", results(TestItem.AST, 1));
+            check(System.currentTimeMillis() - t1 < 200, "recordPatientResult 는 디스크를 기다리지 않음");
+        } finally {
+            CsvAppender.setTestHook(null);
+        }
+        check(hs.flush(15000), "지연이 끝난 뒤 모두 저장됨");
+        check(Files.readAllLines(com.hitachi3100.util.DataPaths.file("results.csv")).size() == 3, "헤더+2건 저장");
+        os.shutdown();
+    }
+
+    /** 본 파일(results.csv)만 쓰기 실패하도록 만드는 훅 (엑셀이 파일을 연 상태를 흉내) */
+    static volatile boolean locked = false;
+
+    static void lockMainFile() {
+        locked = true;
+        CsvAppender.setTestHook(target -> {
+            if (locked && !target.getFileName().toString().endsWith(".pending")) {
+                throw new java.io.IOException("다른 프로세스가 파일을 사용 중이기 때문에 프로세스가 액세스 할 수 없습니다 (시뮬레이션)");
+            }
+        });
+    }
+
+    static void testFileLockFallbackAndMerge() throws Exception {
+        Path dir = freshDataDir();
+        List<String> msgs = new CopyOnWriteArrayList<>();
+        java.util.function.Consumer<String> l = msgs::add;
+        com.hitachi3100.util.Storage.addListener(l);
+        HistoryService hs = new HistoryService();
+        hs.recordPatientResult(1, "BEFORE", "AST", results(TestItem.AST, 30));
+        check(hs.flush(3000), "정상 저장");
+        lockMainFile();
+        try {
+            hs.recordPatientResult(2, "LOCK-1", "AST", results(TestItem.AST, 31));
+            hs.recordPatientResult(3, "LOCK-2", "AST", results(TestItem.AST, 32));
+            check(hs.flush(5000), "잠긴 동안에도 flush 가능(.pending 에 기록)");
+            Path main = dir.resolve("results.csv");
+            Path pend = dir.resolve("results.csv.pending");
+            check(Files.exists(pend) && Files.readAllLines(pend).size() == 2, "pending 에 2건 보관");
+            check(Files.readAllLines(main).size() == 2, "본 파일은 헤더+BEFORE 만 (잠김)");
+            check(hs.getAllHistory().size() == 3, "화면(메모리)에는 3건");
+            check(msgs.stream().anyMatch(m -> m.contains("쓸 수 없습니다")), "잠김 경고 알림: " + msgs);
+
+            // 프로그램 재시작 흉내: 잠긴 채로 새로 읽어도 pending 의 2건이 보임
+            HistoryService restarted = new HistoryService();
+            check(restarted.getAllHistory().size() == 3, "재시작해도 3건 (본 파일 + pending): " + restarted.getAllHistory().size());
+        } finally {
+            locked = false;      // 엑셀을 닫음
+        }
+        check(waitUntil(() -> !Files.exists(dir.resolve("results.csv.pending")), 10000), "잠금 해제 후 pending 자동 병합");
+        List<String> lines = Files.readAllLines(dir.resolve("results.csv"));
+        check(lines.size() == 4, "헤더+3건 (중복/유실 없음): " + lines.size());
+        check(lines.get(1).contains("BEFORE") && lines.get(2).contains("LOCK-1") && lines.get(3).contains("LOCK-2"), "순서 유지");
+        check(msgs.stream().anyMatch(m -> m.contains("병합")), "복구 알림");
+        CsvAppender.setTestHook(null);
+        com.hitachi3100.util.Storage.removeListener(l);
+    }
+
+    static void testMergeCrashNoDuplicates() throws Exception {
+        Path dir = freshDataDir();
+        HistoryService seed = new HistoryService();
+        seed.recordPatientResult(1, "DUP-1", "AST", results(TestItem.AST, 30));
+        seed.recordPatientResult(2, "DUP-2", "AST", results(TestItem.AST, 31));
+        seed.flush(3000);
+        // 병합 직후 pending 삭제 전에 프로그램이 종료된 상황: 같은 줄이 pending 에도 남아 있음
+        List<String> data = Files.readAllLines(dir.resolve("results.csv"));
+        Files.write(dir.resolve("results.csv.pending"), data.subList(1, 3));
+        HistoryService h = new HistoryService();
+        check(h.getAllHistory().size() == 2, "읽을 때 중복 제거: " + h.getAllHistory().size());
+        check(waitUntil(() -> !Files.exists(dir.resolve("results.csv.pending")), 10000), "pending 정리");
+        check(Files.readAllLines(dir.resolve("results.csv")).size() == 3, "본 파일에 중복이 추가되지 않음");
+    }
+
+    static void testReagentSaveRetry() throws Exception {
+        Path dir = freshDataDir();
+        List<String> msgs = new CopyOnWriteArrayList<>();
+        java.util.function.Consumer<String> l = msgs::add;
+        com.hitachi3100.util.Storage.addListener(l);
+        ReagentService first = new ReagentService();
+        check(first.flush(3000), "초기 저장");
+        double before = reagentTests(first, TestItem.AST);
+        first.close();
+
+        // 파일 교체가 불가능한 상태(디렉터리가 같은 이름으로 존재)를 만들어 잠김을 흉내
+        Path target = dir.resolve("reagents.csv");
+        Path backup = dir.resolve("reagents.bak");
+        Files.move(target, backup);
+        Files.createDirectory(target);
+        Files.writeString(target.resolve("x"), "x");
+
+        ReagentService rs = new ReagentService();
+        rs.deductReagents(List.of(TestItem.AST));
+        check(reagentTests(rs, TestItem.AST) == before - 2, "메모리 값은 정상 차감");
+        check(waitUntil(() -> msgs.stream().anyMatch(m -> m.contains("저장할 수 없습니다")), 6000), "저장 실패 알림: " + msgs);
+
+        Files.delete(target.resolve("x"));
+        Files.delete(target);                 // 잠금 해제
+        check(waitUntil(() -> Files.isRegularFile(target), 10000), "재시도로 파일 생성");
+        check(rs.flush(5000), "저장 완료");
+        rs.close();
+        check(reagentTests(new ReagentService(), TestItem.AST) == before - 2, "재시작 후에도 차감 값 유지");
+        check(msgs.stream().anyMatch(m -> m.contains("복구")), "복구 알림");
+        com.hitachi3100.util.Storage.removeListener(l);
+    }
+
+    // ------------------------------------------------------------------ B단계: 지연 로딩 / 기간 검색
+
+    static String csvRow(java.time.LocalDateTime t, int pos, String id, String status) {
+        return new PatientRecord(t, pos, id, "AST", status, results(TestItem.AST, 30)).toCsvLine();
+    }
+
+    static void testLazyLoadAndArchiveSearch() throws Exception {
+        Path dir = freshDataDir();
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        List<String> lines = new ArrayList<>();
+        lines.add("TestDateTime,Position,PatientId,TestItems,Status,Results");
+        for (int i = 0; i < 50; i++) lines.add(csvRow(now.minusDays(400).plusMinutes(i), 1 + i % 35, "OLD-" + i, i % 10 == 0 ? "이상치" : "정상"));
+        for (int i = 0; i < 20; i++) lines.add(csvRow(now.minusDays(100).plusMinutes(i), 1, "MID-" + i, "정상"));
+        for (int i = 0; i < 30; i++) lines.add(csvRow(now.minusDays(5).plusMinutes(i), 2, "NEW-" + i, "정상"));
+        Files.write(dir.resolve("results.csv"), lines);
+
+        HistoryService hs = new HistoryService(30);
+        check(hs.getAllHistory().size() == 30, "최근 30일 기록만 메모리에: " + hs.getAllHistory().size());
+        check(hs.getAllHistory().get(0).getPatientId().equals("NEW-29"), "최신순");
+        check(hs.filter("OLD-", "전체").isEmpty(), "메모리 필터에는 과거 기록이 없음");
+
+        java.time.LocalDate oldFrom = now.minusDays(401).toLocalDate();
+        java.time.LocalDate oldTo = now.minusDays(399).toLocalDate();
+        HistoryService.ArchiveResult r = hs.searchArchive(oldFrom, oldTo, "", "전체", 2000);
+        check(r.rows.size() == 50 && !r.truncated, "과거 기간 검색 50건: " + r.rows.size());
+        check(r.rows.get(0).getPatientId().equals("OLD-49"), "결과도 최신순");
+        HistoryService.ArchiveResult q = hs.searchArchive(oldFrom, oldTo, "OLD-1", "전체", 2000);
+        check(q.rows.size() == 11, "검색어 필터 (OLD-1, OLD-10~19): " + q.rows.size());
+        HistoryService.ArchiveResult st = hs.searchArchive(oldFrom, oldTo, "", "이상치", 2000);
+        check(st.rows.size() == 5, "상태 필터: " + st.rows.size());
+        HistoryService.ArchiveResult lim = hs.searchArchive(oldFrom, oldTo, "", "전체", 10);
+        check(lim.rows.size() == 10 && lim.truncated && lim.matchedScanned == 50, "limit 적용 + truncated");
+        check(lim.rows.get(0).getPatientId().equals("OLD-49"), "limit 시 최신 쪽을 유지");
+        check(hs.searchArchive(now.minusDays(300).toLocalDate(), now.minusDays(200).toLocalDate(), "", "전체", 100).rows.isEmpty(), "데이터 없는 기간");
+
+        // 방금 기록한(아직 파일에 안 쓴) 건도 기간 검색에 포함
+        hs.recordPatientResult(5, "JUST-NOW", "AST", results(TestItem.AST, 30));
+        check(hs.searchArchive(now.toLocalDate(), now.toLocalDate(), "JUST-NOW", "전체", 10).rows.size() == 1, "최근 기록 포함");
+    }
+
+    static void testMemoryCapAndQcWindow() throws Exception {
+        Path dir = freshDataDir();
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        StringBuilder sb = new StringBuilder("TestDateTime,Position,PatientId,TestItems,Status,Results\n");
+        for (int i = 0; i < 25_000; i++) sb.append(csvRow(now.minusMinutes(25_000 - i), 1, "P-" + i, "정상")).append("\n");
+        Files.writeString(dir.resolve("results.csv"), sb.toString());
+        HistoryService hs = new HistoryService(30);
+        check(hs.getAllHistory().size() == HistoryService.MAX_IN_MEMORY, "상한 20,000건: " + hs.getAllHistory().size());
+        check(hs.getAllHistory().get(0).getPatientId().equals("P-24999"), "가장 최근부터 유지");
+        check(hs.getMemoryFrom().isAfter(now.minusDays(30)), "메모리 시작 시각이 상한에 맞게 조정");
+        check(hs.searchArchive(now.minusDays(30).toLocalDate(), now.toLocalDate(), "P-0", "전체", 3000).rows.size() > 0, "상한 밖 기록도 기간 검색으로 접근");
+
+        // QC: 최근 N일만 로딩
+        List<String> q = new ArrayList<>();
+        q.add("Timestamp,QCLevel,Item,Value,Target,Min,Max,Status");
+        q.add(new QCRecord(now.minusDays(200), "QC1", TestItem.AST, 30, 30, 20, 40).toCsvLine());
+        q.add(new QCRecord(now.minusDays(10), "QC1", TestItem.AST, 31, 30, 20, 40).toCsvLine());
+        q.add(new QCRecord(now.minusDays(1), "QC2", TestItem.ALT, 32, 30, 20, 40).toCsvLine());
+        Files.write(dir.resolve("qc_results.csv"), q);
+        check(new QCService(30).getAllRecords().size() == 2, "QC 최근 30일만 로딩");
+        check(new QCService(365).getAllRecords().size() == 3, "QC 365일이면 전부");
+    }
+
+    static void testCsvRoundTrip() {
+        String tricky = "A,\"B\",C";
+        PatientRecord r = new PatientRecord(java.time.LocalDateTime.of(2026, 1, 2, 3, 4, 5), 7, tricky, "AST, ALT", "정상",
+                results(TestItem.AST, 30.5, TestItem.ALT, 12));
+        PatientRecord back = PatientRecord.fromCsvLine(r.toCsvLine());
+        check(back != null && back.getPatientId().equals(tricky), "쉼표/따옴표 포함 ID 복원: " + (back == null ? null : back.getPatientId()));
+        check(back.getResults().size() == 2 && back.getPosition() == 7 && back.getStatus().equals("정상"), "나머지 열");
+        check(PatientRecord.fromCsvLine("garbage") == null, "손상된 줄은 null");
+        check(PatientRecord.fromCsvLine("2026-01-02 03:04:05,x,ID,AST,정상,\"\"") == null, "숫자 아닌 Position 은 null");
     }
 }

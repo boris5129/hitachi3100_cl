@@ -361,7 +361,7 @@ public class OrderService implements HostProtocolHandler.Delegate {
             try {
                 rl.onResultReceived(matched, results, summary);
             } catch (RuntimeException e) {
-                System.err.println("ResultListener error: " + e);
+                com.hitachi3100.util.AppLog.error("ResultListener error: " + e);
             }
         }
         notifyOrderChanged();
@@ -423,17 +423,18 @@ public class OrderService implements HostProtocolHandler.Delegate {
             try {
                 r.run();
             } catch (RuntimeException e) {
-                System.err.println("OrderChangeListener error: " + e);
+                com.hitachi3100.util.AppLog.error("OrderChangeListener error: " + e);
             }
         }
     }
 
     private void fireEvent(String msg) {
+        if (msg.startsWith("⚠")) com.hitachi3100.util.AppLog.warn(msg); else com.hitachi3100.util.AppLog.info(msg);
         for (Consumer<String> l : eventListeners) {
             try {
                 l.accept(msg);
             } catch (RuntimeException e) {
-                System.err.println("EventListener error: " + e);
+                com.hitachi3100.util.AppLog.error("EventListener error: " + e);
             }
         }
     }

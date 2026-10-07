@@ -3,7 +3,9 @@ package com.hitachi3100.service;
 import com.hitachi3100.model.ReagentItem;
 import com.hitachi3100.model.TestItem;
 
+import com.hitachi3100.util.AppLog;
 import com.hitachi3100.util.DataPaths;
+import com.hitachi3100.util.SnapshotWriter;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -20,8 +22,20 @@ public class ReagentService {
     private final List<ReagentItem> reagents = new ArrayList<>();
     private final List<Runnable> changeListeners = new CopyOnWriteArrayList<>();
 
+    private final SnapshotWriter writer;
+
     public ReagentService() {
+        // 저장은 백그라운드에서 합쳐서 수행 (잠겨 있으면 메모리에 유지하며 재시도)
+        this.writer = new SnapshotWriter(DataPaths.file(REAGENTS_NAME), this::buildCsv);
         initReagents();
+    }
+
+    public boolean flush(long timeoutMs) {
+        return writer.flush(timeoutMs);
+    }
+
+    public void close() {
+        writer.close();
     }
 
     private void initReagents() {
@@ -155,21 +169,21 @@ public class ReagentService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error reading reagents.csv: " + e.getMessage());
+            com.hitachi3100.util.AppLog.error("Error reading reagents.csv: " + e.getMessage());
         }
     }
 
-    private synchronized void saveToCsv() {
+    private void saveToCsv() {
+        writer.requestSave();
+    }
+
+    private synchronized String buildCsv() {
         StringBuilder sb = new StringBuilder();
         String nl = System.lineSeparator();
         sb.append("Item,Type,CurrentTests,MaxTests,LastUsedTime").append(nl);
         for (ReagentItem r : reagents) {
             sb.append(r.toCsvLine()).append(nl);
         }
-        try {
-            DataPaths.atomicWrite(DataPaths.file(REAGENTS_NAME), sb.toString());   // 쓰는 도중 종료되어도 기존 파일 보존
-        } catch (Exception e) {
-            System.err.println("Error writing reagents.csv: " + e.getMessage());
-        }
+        return sb.toString();
     }
 }

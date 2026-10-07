@@ -216,7 +216,7 @@ public class Hitachi3100Simulator implements IHitachiChannel {
             try {
                 l.onFrameReceived(frame);
             } catch (RuntimeException e) {
-                System.err.println("Simulator listener error: " + e);
+                com.hitachi3100.util.AppLog.error("Simulator listener error: " + e);
             }
         }
     }
@@ -278,7 +278,7 @@ public class Hitachi3100Simulator implements IHitachiChannel {
                 try {
                     r.run();
                 } catch (Throwable t) {
-                    System.err.println("Simulator error: " + t);
+                    com.hitachi3100.util.AppLog.error("Simulator error: " + t);
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
@@ -293,7 +293,7 @@ public class Hitachi3100Simulator implements IHitachiChannel {
                 try {
                     r.run();
                 } catch (Throwable t) {
-                    System.err.println("Simulator error: " + t);
+                    com.hitachi3100.util.AppLog.error("Simulator error: " + t);
                 }
             }, delayMs, TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.RejectedExecutionException ignored) {

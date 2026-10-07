@@ -3,7 +3,10 @@ package com.hitachi3100.ui.theme;
 import javax.swing.*;
 import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
+import javax.swing.plaf.basic.BasicButtonUI;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 
 /**
  * 모던 클리니컬 UI 스타일, 색상 및 폰트 정의
@@ -19,6 +22,13 @@ public class UIStyle {
     // 브랜드 & 악센트
     public static final Color COLOR_PRIMARY    = new Color(37, 99, 235); // Royal Blue
     public static final Color COLOR_PRIMARY_HOVER = new Color(29, 78, 216);
+
+    // 버튼 색상 (초록 계열, 흰 글씨)
+    public static final Color COLOR_BUTTON       = new Color(22, 163, 74);
+    public static final Color COLOR_BUTTON_HOVER = new Color(21, 128, 61);
+    public static final Color COLOR_BUTTON_ALT       = new Color(5, 150, 105);
+    public static final Color COLOR_BUTTON_ALT_HOVER = new Color(4, 120, 87);
+    public static final Color COLOR_BUTTON_DISABLED  = new Color(148, 163, 184);
 
     // 임상 판정 및 상태 색상
     public static final Color COLOR_NORMAL_TEXT = new Color(22, 101, 52);
@@ -44,31 +54,46 @@ public class UIStyle {
     public static final Font FONT_SMALL = new Font("Malgun Gothic", Font.PLAIN, 11);
     public static final Font FONT_MONO = new Font("Consolas", Font.BOLD, 12);
 
-    public static JButton createPrimaryButton(String text) {
-        JButton btn = new JButton(text);
+    /**
+     * 버튼에 초록 배경 + 흰 굵은 글씨를 적용한다.
+     * BasicButtonUI 를 사용하므로 Windows 등 시스템 룩앤필이 배경색을 무시해도 색이 그대로 보인다.
+     */
+    public static void styleButton(JButton btn, Color normal, Color hover) {
+        btn.setUI(new BasicButtonUI());
         btn.setFont(FONT_BOLD);
-        btn.setBackground(COLOR_PRIMARY);
         btn.setForeground(Color.WHITE);
+        btn.setBackground(normal);
+        btn.setOpaque(true);
+        btn.setContentAreaFilled(true);
         btn.setFocusPainted(false);
         btn.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(COLOR_PRIMARY_HOVER, 1),
+                BorderFactory.createLineBorder(hover, 1),
                 BorderFactory.createEmptyBorder(6, 14, 6, 14)
         ));
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                if (btn.isEnabled()) btn.setBackground(hover);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (btn.isEnabled()) btn.setBackground(normal);
+            }
+        });
+        btn.addPropertyChangeListener("enabled", e -> btn.setBackground(btn.isEnabled() ? normal : COLOR_BUTTON_DISABLED));
+    }
+
+    public static JButton createPrimaryButton(String text) {
+        JButton btn = new JButton(text);
+        styleButton(btn, COLOR_BUTTON, COLOR_BUTTON_HOVER);
         return btn;
     }
 
     public static JButton createSecondaryButton(String text) {
         JButton btn = new JButton(text);
-        btn.setFont(FONT_BOLD);
-        btn.setBackground(COLOR_SURFACE);
-        btn.setForeground(new Color(51, 65, 85));
-        btn.setFocusPainted(false);
-        btn.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(COLOR_BORDER, 1),
-                BorderFactory.createEmptyBorder(6, 12, 6, 12)
-        ));
-        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        styleButton(btn, COLOR_BUTTON_ALT, COLOR_BUTTON_ALT_HOVER);
         return btn;
     }
 

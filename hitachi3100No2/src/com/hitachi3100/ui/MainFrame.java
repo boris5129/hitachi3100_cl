@@ -168,22 +168,22 @@ public class MainFrame extends JFrame {
         channelSelectorCombo.addActionListener(e -> onSwitchChannel());
         right.add(channelSelectorCombo);
 
-        connectButton = new JButton("연결 해제");
+        connectButton = UIStyle.createSecondaryButton("연결 해제");
         connectButton.setFont(UIStyle.FONT_BOLD);
         connectButton.setFocusPainted(false);
         connectButton.addActionListener(e -> onToggleConnection());
         right.add(connectButton);
 
-        virtualQc1Btn = new JButton("🧪 가상 QC1");
+        virtualQc1Btn = UIStyle.createSecondaryButton("🧪 가상 QC1");
         virtualQc1Btn.setToolTipText("시뮬레이터 전용: 장비에서 Control No.1 샘플 측정이 끝난 상황을 만듭니다 (Host 는 Control 오더를 낼 수 없음)");
         virtualQc1Btn.addActionListener(e -> injectVirtualControl(1));
         right.add(virtualQc1Btn);
-        virtualQc2Btn = new JButton("🧪 가상 QC2");
+        virtualQc2Btn = UIStyle.createSecondaryButton("🧪 가상 QC2");
         virtualQc2Btn.setToolTipText("시뮬레이터 전용: Control No.2 샘플");
         virtualQc2Btn.addActionListener(e -> injectVirtualControl(2));
         right.add(virtualQc2Btn);
 
-        JButton traceBtn = new JButton("📡 통신 트레이스");
+        JButton traceBtn = UIStyle.createSecondaryButton("📡 통신 트레이스");
         traceBtn.setFont(UIStyle.FONT_BOLD);
         traceBtn.setFocusPainted(false);
         traceBtn.addActionListener(e -> traceDialog.setVisible(true));

@@ -165,15 +165,15 @@ public class Tab1OrderResultPanel extends JPanel {
         JPanel presetTop = new JPanel(new GridLayout(1, 3, 4, 4));
         presetTop.setOpaque(false);
 
-        JButton liverBtn = new JButton("간기능 패널");
+        JButton liverBtn = UIStyle.createSecondaryButton("간기능 패널");
         liverBtn.addActionListener(e -> applyPreset(PresetPanel.liverPanel()));
         presetTop.add(liverBtn);
 
-        JButton kidneyBtn = new JButton("신장/지질 패널");
+        JButton kidneyBtn = UIStyle.createSecondaryButton("신장/지질 패널");
         kidneyBtn.addActionListener(e -> applyPreset(PresetPanel.kidneyLipidPanel()));
         presetTop.add(kidneyBtn);
 
-        JButton diabetesBtn = new JButton("당뇨/특수 패널");
+        JButton diabetesBtn = UIStyle.createSecondaryButton("당뇨/특수 패널");
         diabetesBtn.addActionListener(e -> applyPreset(PresetPanel.diabetesSpecialPanel()));
         presetTop.add(diabetesBtn);
 
@@ -192,7 +192,7 @@ public class Tab1OrderResultPanel extends JPanel {
         });
         presetBottom.add(presetComboBox, BorderLayout.CENTER);
 
-        JButton saveCustomSetBtn = new JButton("내 세트 저장");
+        JButton saveCustomSetBtn = UIStyle.createSecondaryButton("내 세트 저장");
         saveCustomSetBtn.addActionListener(e -> saveCustomPreset());
         presetBottom.add(saveCustomSetBtn, BorderLayout.EAST);
 
@@ -209,10 +209,10 @@ public class Tab1OrderResultPanel extends JPanel {
 
         JPanel checkAllBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 2));
         checkAllBar.setOpaque(false);
-        JButton selectAllBtn = new JButton("전체 선택");
+        JButton selectAllBtn = UIStyle.createSecondaryButton("전체 선택");
         selectAllBtn.setFont(UIStyle.FONT_SMALL);
         selectAllBtn.addActionListener(e -> itemCheckBoxMap.values().forEach(cb -> cb.setSelected(true)));
-        JButton deselectAllBtn = new JButton("전체 해제");
+        JButton deselectAllBtn = UIStyle.createSecondaryButton("전체 해제");
         deselectAllBtn.setFont(UIStyle.FONT_SMALL);
         deselectAllBtn.addActionListener(e -> itemCheckBoxMap.values().forEach(cb -> cb.setSelected(false)));
         checkAllBar.add(selectAllBtn);

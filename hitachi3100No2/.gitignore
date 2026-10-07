@@ -1,0 +1,11 @@
+# 빌드 산출물 / IDE
+bin/
+out/
+.idea/
+*.class
+sources.txt
+
+# 환자 검사 데이터 및 운영 설정 (실제 환자 ID 가 포함될 수 있으므로 저장소에 올리지 않는다)
+data/*.csv
+data/qc_config.properties
+data/presets.properties

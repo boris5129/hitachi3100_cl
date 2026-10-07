@@ -1,0 +1,8 @@
+# 파일 이름을 serial.properties 로 바꿔서 사용. 장비의 [Menu]→[Parameters]→[System]→[Com. Parameters] 설정과 같아야 함.
+baud=9600
+dataBits=7
+stopBits=2
+# N(없음) / E(짝수) / O(홀수)
+parity=E
+# 케이블이 RTS/CTS 를 결선했을 때만 true
+rtsCts=false

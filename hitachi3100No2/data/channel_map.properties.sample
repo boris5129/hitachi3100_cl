@@ -1,0 +1,5 @@
+# 파일 이름을 channel_map.properties 로 바꿔서 사용.
+# 장비(AU)에 배정된 Test Code(채널 번호, 1~36 / 전해질 37)가 기본값과 다를 때 항목별로 지정한다.
+# 기본값: AST=1 ALT=2 GGT=3 T-bil=4 ... (TestItem.java 참고)
+#AST=1
+#ALT=2

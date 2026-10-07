@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="hitachi3100">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/hitachi3100.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
